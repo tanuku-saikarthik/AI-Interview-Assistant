@@ -3,7 +3,7 @@ import { Modal, Input, Button, message } from "antd";
 
 export default function AccessModal({ visible, onConfirm }) {
   const [token, setToken] = useState("");
-  const correctToken = import.meta.env.INTERVIEWER_PASSWORD;;
+  const correctToken = import.meta.env.INTERVIEWER_PASSWORD||"interviewer123";
   const handleSubmit = () => {
     if (token === correctToken) {
       onConfirm();
