@@ -57,7 +57,7 @@ export async function generateQuestion(difficulty, index) {
         `Generate a single ${difficulty.toUpperCase()} interview question for a Full-Stack (React/Node) role. 
 
 Requirements:
-- Focus on real-world full-stack concepts, system design, React/Node architecture, API integration, performance, or debugging scenarios.
+- Focus on real-world full-stack concepts, React/Node architecture, API integration, and the question should be less than 3 sentences.
 - Do NOT ask the candidate to write isolated small functions (like filtering arrays or string manipulation), or build full websites.
 - The question should test understanding, reasoning, or problem-solving in a real interview context.
 

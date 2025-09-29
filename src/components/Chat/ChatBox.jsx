@@ -19,16 +19,19 @@ import {
 } from "../../api/aiService";
 import QuestionTimer from "./QuestionTimer";
 import WelcomeBackModal from "../Welcome.jsx";
+
 function getDifficultyByIndex(i) {
   if (i <= 1) return "easy";
   if (i <= 3) return "medium";
   return "hard";
 }
+
 function getTimerForDifficulty(diff) {
   if (diff === "easy") return 20;
   if (diff === "medium") return 60;
   return 120;
 }
+
 export default function ChatBox() {
   const dispatch = useDispatch();
   const candidates = useSelector((s) => s.candidates);
@@ -41,6 +44,7 @@ export default function ChatBox() {
     timer: 0,
     currentQuestion: null,
   };
+
   const [questionLoaded, setQuestionLoaded] = useState(false);
   const [localSession, setLocalSession] = useState(sessionFromStore);
   const [candidate, setCandidate] = useState(
@@ -50,60 +54,55 @@ export default function ChatBox() {
   const [welcomeVisible, setWelcomeVisible] = useState(false);
   const [redFlags, setRedFlags] = useState(0);
   const timerRef = useRef(null);
+
+  // RED FLAG HANDLER
   const logRedFlag = (type) => {
     setRedFlags((prev) => {
       const newCount = prev + 1;
       alert(`Red flag detected: ${type}. Strike ${newCount} of 3.`);
-      if (newCount >= 3) {
-        handleInterviewStopAndReload();
+      // If interview already running, stop and reset score
+      if (localSession.running && newCount >= 3) {
+        handleInterviewStop();
       }
       return newCount;
     });
   };
-  const handleInterviewStopAndReload = () => {
+
+  // STOP INTERVIEW AND RESET SCORE
+  const handleInterviewStop = () => {
     message.error("Interview stopped due to 3 red flags. Score reset to 0.");
-    setLocalSession({
+    setLocalSession((s) => ({
+      ...s,
+      running: false,
+      currentQuestion: null,
+      timer: 0,
       qas: [],
       questionIndex: 0,
-      running: false,
-      timer: 0,
-      currentQuestion: null,
-    });
+    }));
     if (candidate) {
       const updatedCandidate = { ...candidate, qas: [], score: 0 };
       setCandidate(updatedCandidate);
       dispatch(addOrUpdateCandidate(updatedCandidate));
     }
-    setTimeout(() => {
-      window.location.reload();
-    }, 1000);
   };
+
+  // Add global event listeners for red flags
   useEffect(() => {
-    const handleCopy = (e) => {
-      e.preventDefault();
-      logRedFlag("copy");
-    };
-    const handlePaste = (e) => {
-      e.preventDefault();
-      logRedFlag("paste");
-    };
-    const handleContextMenu = (e) => {
-      e.preventDefault();
-      logRedFlag("right-click");
-    };
+    const handleCopy = (e) => { e.preventDefault(); logRedFlag("copy"); };
+    const handlePaste = (e) => { e.preventDefault(); logRedFlag("paste"); };
+    const handleContextMenu = (e) => { e.preventDefault(); logRedFlag("right-click"); };
     const handleKeyDown = (e) => {
-      if (
-        e.key === "F12" ||
-        (e.ctrlKey && e.shiftKey && ["I", "J", "C"].includes(e.key))
-      ) {
+      if (e.key === "F12" || (e.ctrlKey && e.shiftKey && ["I","J","C"].includes(e.key))) {
         e.preventDefault();
         logRedFlag("devtools");
       }
     };
+
     document.addEventListener("copy", handleCopy);
     document.addEventListener("paste", handlePaste);
     document.addEventListener("contextmenu", handleContextMenu);
     document.addEventListener("keydown", handleKeyDown);
+
     return () => {
       document.removeEventListener("copy", handleCopy);
       document.removeEventListener("paste", handlePaste);
@@ -111,10 +110,12 @@ export default function ChatBox() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [localSession.running, candidate]);
+
   useEffect(() => {
     setCandidate(candidates.find((c) => c.id === activeId) || null);
     setLocalSession(sessionFromStore);
   }, [activeId, candidates, sessionFromStore]);
+
   const welcomeCheckedRef = useRef(false);
   useEffect(() => {
     if (!welcomeCheckedRef.current) {
@@ -125,6 +126,7 @@ export default function ChatBox() {
       welcomeCheckedRef.current = true;
     }
   }, [activeId, interview.sessions]);
+
   useEffect(() => {
     if (!activeId) return;
     dispatch(updateSession({ id: activeId, patch: localSession }));
@@ -133,6 +135,7 @@ export default function ChatBox() {
       dispatch(addOrUpdateCandidate(updatedCandidate));
     }
   }, [localSession.qas]);
+
   useEffect(() => {
     if (!localSession.running || localSession.timer <= 0 || !questionLoaded)
       return;
@@ -148,12 +151,14 @@ export default function ChatBox() {
     }, 1000);
     return () => clearInterval(interval);
   }, [localSession.running, answer, questionLoaded]);
+
   async function collectMissingField(field) {
     const resp = await assistantPrompt(
       `We are missing candidate's ${field}. Please ask in a short friendly sentence for that field.`
     );
     return resp || `Please provide your ${field}`;
   }
+
   async function startInterview() {
     if (redFlags >= 3) {
       message.error("Cannot start interview: 3 red flags already recorded.");
@@ -190,6 +195,7 @@ export default function ChatBox() {
     if (done < 6) await loadQuestion(done);
     else message.info("Interview already completed.");
   }
+
   async function loadQuestion(index) {
     const difficulty = getDifficultyByIndex(index);
     setLocalSession((s) => ({
@@ -226,10 +232,10 @@ export default function ChatBox() {
       }));
     }
   }
+
   async function handleSubmit(auto = false, currentAnswer) {
     if (!candidate || !localSession.currentQuestion) return;
-    const ans =
-      currentAnswer !== undefined ? currentAnswer.trim() : answer.trim();
+    const ans = currentAnswer !== undefined ? currentAnswer.trim() : answer.trim();
     const newQ = {
       index: localSession.questionIndex,
       question: localSession.currentQuestion.question,
@@ -254,6 +260,7 @@ export default function ChatBox() {
       await gradeAndFinishCandidate(newQAs);
     }
   }
+
   async function gradeAndFinishCandidate(qas) {
     message.loading({ content: "Grading answers...", key: "grading" });
     try {
@@ -296,6 +303,7 @@ export default function ChatBox() {
       message.error("Grading failed.");
     }
   }
+
   function resumeInterview() {
     setWelcomeVisible(false);
     const done = candidate.qas?.length || 0;
@@ -306,6 +314,7 @@ export default function ChatBox() {
     }));
     if (done < 6) loadQuestion(done);
   }
+
   async function editCandidateDetails() {
     if (!candidate) return;
     const name = window.prompt("Enter candidate's name:", candidate.name || "");
@@ -325,6 +334,7 @@ export default function ChatBox() {
     dispatch(addOrUpdateCandidate(updated));
     message.success("Candidate details updated");
   }
+
   return (
     <div className="chat-window">
       {!candidate ? (
@@ -334,29 +344,20 @@ export default function ChatBox() {
       ) : (
         <>
           <Card>
-            <div>
-              <b>Candidate:</b> {candidate.name || "Unknown"}
-            </div>
-            <div>
-              <b>Email:</b> {candidate.email || "—"}
-            </div>
-            <div>
-              <b>Phone:</b> {candidate.phone || "—"}
-            </div>
+            <div><b>Candidate:</b> {candidate.name || "Unknown"}</div>
+            <div><b>Email:</b> {candidate.email || "—"}</div>
+            <div><b>Phone:</b> {candidate.phone || "—"}</div>
             <div style={{ marginTop: 8 }}>
               <Button
                 type="primary"
                 onClick={startInterview}
-                disabled={
-                  localSession.running ||
-                  localSession.qas?.length > 0 ||
-                  redFlags >= 3
-                }
+                disabled={localSession.running || (localSession.qas?.length > 0) || redFlags >= 3}
               >
                 Start Interview
               </Button>
             </div>
           </Card>
+
           <div style={{ marginTop: 12 }}>
             <div
               style={{
