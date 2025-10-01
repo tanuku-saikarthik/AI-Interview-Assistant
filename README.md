@@ -5,7 +5,7 @@
 AI Interview Assistant is a React-based web application designed to simulate real-time technical interviews. It features two synchronized tabs:
 
 - **Interviewee (Chat)**: Allows candidates to upload resumes, answer AI-generated questions, and receive real-time feedback.
-- **Interviewer (Dashboard)**: Enables interviewers to view candidate responses, scores, and summaries. (For testing purposes, use the interviewer access token: interviewer123.)
+- **Interviewer (Dashboard)**: Enables interviewers to view candidate responses, scores, and summaries. (For testing purposes, use the interviewer access token: **interviewer123**.)
 
 The application ensures data persistence, allowing users to resume sessions seamlessly.
 
