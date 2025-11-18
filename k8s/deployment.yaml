@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+name: ai-interview-deployment
+namespace: ai-interview
+labels:
+app: ai-interview
+spec:
+replicas: 2
+selector:
+matchLabels:
+app: ai-interview
+template:
+metadata:
+labels:
+app: ai-interview
+spec:
+containers:
+- name: ai-interview-container
+image: REPLACE_WITH_IMAGE
+ports:
+- containerPort: 80
+resources:
+requests:
+cpu: "100m"
+memory: "128Mi"
+limits:
+cpu: "500m"
+memory: "512Mi"
+livenessProbe:
+httpGet:
+path: /
+port: 80
+initialDelaySeconds: 10
+periodSeconds: 20
+readinessProbe:
+httpGet:
+path: /
+port: 80
+initialDelaySeconds: 5
+periodSeconds: 10s
