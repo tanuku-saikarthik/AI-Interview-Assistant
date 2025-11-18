@@ -85,34 +85,35 @@ pipeline {
         }
       }
     }
-  }
-stage('Deploy to Kubernetes') {
-  steps {
-    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONF')]) {
-      sh '''
-        set -e
-        export KUBECONFIG="$KUBECONF"
 
-        # ensure namespace exists
-        kubectl apply -f k8s/namespace.yaml || true
+    stage('Deploy to Kubernetes') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONF')]) {
+          sh '''
+            set -e
+            export KUBECONFIG="$KUBECONF"
 
-        # replace placeholder in a copy of deployment manifest to avoid committing changes
-        IMAGE_FULL=${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-        echo "Deploying IMAGE_FULL=$IMAGE_FULL to Kubernetes namespace ai-interview"
+            # ensure namespace exists
+            kubectl apply -f k8s/namespace.yaml || true
 
-        # make a temp file (keeps repo file unchanged)
-        sed "s|REPLACE_IMAGE|${IMAGE_FULL//&/\\&}|g" k8s/deployment.yaml > /tmp/deployment-applied.yaml
+            # compute image to deploy
+            IMAGE_FULL=${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+            echo "Deploying IMAGE_FULL=$IMAGE_FULL to Kubernetes namespace ai-interview"
 
-        kubectl -n ai-interview apply -f /tmp/deployment-applied.yaml
-        kubectl -n ai-interview apply -f k8s/service.yaml
-        kubectl -n ai-interview apply -f k8s/ingress.yaml || true
+            # substitute placeholder in a temp file (do not modify repo file)
+            sed "s|REPLACE_IMAGE|${IMAGE_FULL//&/\\&}|g" k8s/deployment.yaml > /tmp/deployment-applied.yaml
 
-        # wait for rollout
-        kubectl -n ai-interview rollout status deployment/ai-interview-deployment --timeout=180s || true
-      '''
+            kubectl -n ai-interview apply -f /tmp/deployment-applied.yaml
+            kubectl -n ai-interview apply -f k8s/service.yaml
+            kubectl -n ai-interview apply -f k8s/ingress.yaml || true
+
+            # wait for rollout
+            kubectl -n ai-interview rollout status deployment/ai-interview-deployment --timeout=180s || true
+          '''
+        }
+      }
     }
   }
-}
 
   post {
     always {
