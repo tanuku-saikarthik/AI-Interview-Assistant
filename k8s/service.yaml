@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-name: ai-interview-service
-namespace: ai-interview
+  name: ai-interview-service
+  namespace: ai-interview
 spec:
-type: ClusterIP
-selector:
-app: ai-interview
-ports:
-- port: 80
-targetPort: 80
-protocol: TCP
-name: http
+  type: ClusterIP
+  selector:
+    app: ai-interview
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
