@@ -1,44 +1,320 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ai-interview-deployment
-  namespace: ai-interview
-  labels:
-    app: ai-interview
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: ai-interview
-  template:
-    metadata:
-      labels:
-        app: ai-interview
-    spec:
-      imagePullSecrets:
-        - name: regcred            # Jenkins will create this secret; name controlled by IMAGE_PULL_SECRET env var
-      containers:
-        - name: ai-interview-container
-          image: __IMAGE_FULL__
-          imagePullPolicy: Always
-          ports:
-            - containerPort: 80
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 10
-            periodSeconds: 20
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 5
-            periodSeconds: 10
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  environment {
+    // adjust these in Jenkins job or leave defaults
+    DOCKER_REGISTRY   = "${env.DOCKER_REGISTRY ?: 'docker.io'}"
+    IMAGE_NAME        = "${env.IMAGE_NAME ?: 'tsaikarthik/ai-interview-assistant'}"
+    IMAGE_TAG         = "${env.IMAGE_TAG ?: 'latest'}"
+    K8S_NAMESPACE     = "${env.K8S_NAMESPACE ?: 'ai-interview'}"
+    K8S_DEPLOYMENT    = "${env.K8S_DEPLOYMENT ?: 'ai-interview-deployment'}"
+    K8S_CONTAINER     = "${env.K8S_CONTAINER ?: 'ai-interview-container'}"
+    K8S_MANIFEST_DIR  = "${env.K8S_MANIFEST_DIR ?: 'k8s'}"
+    IMAGE_PULL_SECRET = "${env.IMAGE_PULL_SECRET ?: 'regcred'}"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          def shortCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD 2>/dev/null || echo ""').trim()
+          if (!env.IMAGE_TAG?.trim() || env.IMAGE_TAG == 'latest') {
+            env.IMAGE_TAG = shortCommit ?: "build-${env.BUILD_NUMBER}"
+          }
+
+          String registry = (env.DOCKER_REGISTRY ?: '').trim()
+          if (registry == 'docker.io' || registry == '') {
+            registry = ''
+          } else {
+            if (!registry.endsWith('/')) { registry = registry + '/' }
+          }
+
+          env.IMAGE_FULL = "${registry}${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.IMAGE_TAG}"
+          echo "Using IMAGE_FULL=${env.IMAGE_FULL}"
+        }
+      }
+    }
+
+    stage('Install & Build (frontend)') {
+      steps {
+        // repo is frontend-only; run npm steps if package.json present
+        sh '''
+          set -e
+          if [ -f package.json ]; then
+            echo "Found package.json — installing deps"
+            if [ -f package-lock.json ]; then
+              npm ci --prefer-offline --no-audit --progress=false
+            else
+              npm install --no-audit --progress=false
+            fi
+
+            if npm run | grep -q "build"; then
+              echo "Building production bundle"
+              npm run build
+            else
+              echo "No build script found; skipping npm run build"
+            fi
+          else
+            echo "No package.json — skipping npm install/build"
+          fi
+        '''
+      }
+    }
+
+    stage('Lint / Test (optional)') {
+      steps {
+        script {
+          sh 'if [ -f package.json ] && npm run | grep -q "lint"; then npm run lint || true; else echo "no lint or no npm"; fi'
+          sh 'if [ -f package.json ] && npm run | grep -q "test"; then npm run test --silent || true; else echo "no test or no npm"; fi'
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        sh '''
+          set -e
+          echo "Building docker image: ${IMAGE_FULL}"
+          export DOCKER_BUILDKIT=1
+          docker build --pull -t "${IMAGE_FULL}" .
+          echo "Built ${IMAGE_FULL}"
+        '''
+      }
+    }
+
+    stage('Login to Docker Registry') {
+      steps {
+        // change credentialsId if your Jenkins uses different id
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            set -e
+            if [ -n "${DOCKER_REGISTRY}" ] && [ "${DOCKER_REGISTRY}" != "docker.io" ]; then
+              LOGIN_TARGET="${DOCKER_REGISTRY}"
+            else
+              LOGIN_TARGET=""
+            fi
+
+            if [ -n "$LOGIN_TARGET" ]; then
+              echo "Logging into ${LOGIN_TARGET} as ${DOCKER_USER}"
+              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin "$LOGIN_TARGET"
+            else
+              echo "Logging into Docker Hub as ${DOCKER_USER}"
+              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            fi
+          '''
+        }
+      }
+    }
+
+    stage('Push Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            set -e
+            echo "Pushing ${IMAGE_FULL}"
+            docker push "${IMAGE_FULL}" || {
+              echo "Push failed for ${IMAGE_FULL}"
+              docker images | grep "$(echo ${IMAGE_NAME} | sed 's/\\/\\\\/g')" || true
+              exit 1
+            }
+            echo "Push succeeded"
+          '''
+        }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        // Requires 'kubeconfig' file credential id and docker creds to create imagePullSecret
+        withCredentials([
+          file(credentialsId: 'kubeconfig', variable: 'KUBECONF'),
+          usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS'),
+          string(credentialsId: 'K8S_API_SERVER', variable: 'K8S_API_SERVER') ?: '',
+          string(credentialsId: 'K8S_TOKEN', variable: 'K8S_TOKEN') ?: '',
+          string(credentialsId: 'K8S_CA_DATA', variable: 'K8S_CA_DATA') ?: ''
+        ]) {
+          sh '''
+            set -euo pipefail
+
+            if ! command -v kubectl >/dev/null 2>&1; then
+              echo "kubectl not found on agent PATH" >&2
+              exit 2
+            fi
+
+            export KUBECONFIG="${KUBECONF}"
+            echo "Using KUBECONFIG at ${KUBECONFIG}"
+            grep -E "server: " "${KUBECONFIG}" || true
+
+            if grep -qE "server: https?://(127\\.0\\.0\\.1|localhost)" "${KUBECONFIG}"; then
+              echo "kubeconfig points to localhost/127.0.0.1 — attempting automatic fixes..."
+
+              if [ -n "${K8S_API_SERVER:-}" ] && [ -n "${K8S_TOKEN:-}" ]; then
+                echo "Building temporary kubeconfig using token auth"
+                TMP_KUBECONF=$(mktemp /tmp/kubeconf.XXXX)
+                cat > "$TMP_KUBECONF" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: ci-cluster
+  cluster:
+    server: ${K8S_API_SERVER}
+EOF
+                if [ -n "${K8S_CA_DATA:-}" ]; then
+                  cat >> "$TMP_KUBECONF" <<EOF
+    certificate-authority-data: ${K8S_CA_DATA}
+EOF
+                else
+                  cat >> "$TMP_KUBECONF" <<EOF
+    insecure-skip-tls-verify: true
+EOF
+                fi
+
+                cat >> "$TMP_KUBECONF" <<EOF
+contexts:
+- name: ci
+  context:
+    cluster: ci-cluster
+    user: ci-user
+current-context: ci
+users:
+- name: ci-user
+  user:
+    token: ${K8S_TOKEN}
+EOF
+                export KUBECONFIG="$TMP_KUBECONF"
+                echo "Temporary kubeconfig built at $TMP_KUBECONF"
+                grep -E "server: " "$KUBECONFIG" || true
+
+              elif [ -n "${K8S_API_SERVER:-}" ]; then
+                echo "K8S_API_SERVER provided — rewriting server host in kubeconfig"
+                TMP_KUBECONF=$(mktemp /tmp/kubeconf.XXXX)
+                awk -v api="${K8S_API_SERVER}" '{
+                  if ($1 == "server:" ) {
+                    print "    server: " api
+                  } else {
+                    print $0
+                  }
+                }' "${KUBECONFIG}" > "$TMP_KUBECONF"
+                export KUBECONFIG="$TMP_KUBECONF"
+                echo "Rewrote kubeconfig; server entries now:"
+                grep -E "server: " "$KUBECONFIG" || true
+              else
+                echo "kubeconfig points at localhost and no K8S_API_SERVER/K8S_TOKEN provided — cannot fix automatically" >&2
+                exit 3
+              fi
+            fi
+
+            echo "Checking kubectl connectivity:"
+            kubectl version --short || {
+              echo "kubectl cannot reach API server" >&2
+              kubectl config view --minify --raw || true
+              exit 3
+            }
+
+            # ensure namespace exists
+            if [ -f "${K8S_MANIFEST_DIR}/namespace.yaml" ]; then
+              kubectl apply -f "${K8S_MANIFEST_DIR}/namespace.yaml" || true
+            else
+              echo "Creating namespace ${K8S_NAMESPACE} (namespace.yaml not found)"
+              kubectl create namespace "${K8S_NAMESPACE}" || true
+            fi
+
+            # create imagePullSecret if needed
+            if kubectl -n "${K8S_NAMESPACE}" get secret "${IMAGE_PULL_SECRET}" >/dev/null 2>&1; then
+              echo "imagePullSecret ${IMAGE_PULL_SECRET} exists"
+            else
+              echo "Creating imagePullSecret ${IMAGE_PULL_SECRET}"
+              if [ -z "${DOCKER_REGISTRY}" ] || [ "${DOCKER_REGISTRY}" = "docker.io" ]; then
+                REG_SERVER="https://index.docker.io/v1/"
+              else
+                REG_SERVER="${DOCKER_REGISTRY}"
+              fi
+              kubectl -n "${K8S_NAMESPACE}" create secret docker-registry "${IMAGE_PULL_SECRET}" \
+                --docker-server="${REG_SERVER}" \
+                --docker-username="${DOCKER_USER}" \
+                --docker-password="${DOCKER_PASS}" || {
+                  echo "Failed to create imagePullSecret" >&2
+                  kubectl -n "${K8S_NAMESPACE}" get secret || true
+                  exit 3
+                }
+            fi
+
+            echo "Preparing deployment manifest (replacing __IMAGE_FULL__ with ${IMAGE_FULL})"
+            TMP_DEPLOY=$(mktemp /tmp/deployment.XXXX.yaml)
+            if command -v python3 >/dev/null 2>&1; then PYTHON_BIN=python3
+            elif command -v python >/dev/null 2>&1; then PYTHON_BIN=python
+            else
+              echo "Python not found (required to replace placeholder)" >&2
+              exit 4
+            fi
+
+            $PYTHON_BIN - <<'PY'
+import os, pathlib, sys
+image = os.environ.get("IMAGE_FULL")
+if not image:
+    sys.exit("IMAGE_FULL missing")
+src = pathlib.Path(os.environ.get("K8S_MANIFEST_DIR","k8s")) / "deployment.yaml"
+if not src.exists():
+    sys.exit(f"{src} not found")
+text = src.read_text()
+ph = "__IMAGE_FULL__"
+if ph not in text:
+    sys.exit(f"Placeholder {ph} missing in {src}")
+text = text.replace(ph, image)
+pathlib.Path(os.environ["TMP_DEPLOY"]).write_text(text)
+print(os.environ["TMP_DEPLOY"])
+PY
+
+            echo "Applying deployment manifest from $TMP_DEPLOY"
+            kubectl -n "${K8S_NAMESPACE}" apply -f "$TMP_DEPLOY"
+
+            echo "Applying service/ingress if present"
+            if [ -f "${K8S_MANIFEST_DIR}/service.yaml" ]; then
+              kubectl -n "${K8S_NAMESPACE}" apply -f "${K8S_MANIFEST_DIR}/service.yaml"
+            else
+              echo "service.yaml not present - skipping"
+            fi
+
+            if [ -f "${K8S_MANIFEST_DIR}/ingress.yaml" ]; then
+              kubectl -n "${K8S_NAMESPACE}" apply -f "${K8S_MANIFEST_DIR}/ingress.yaml" || true
+            else
+              echo "ingress.yaml not present - skipping"
+            fi
+
+            echo "Waiting for rollout of ${K8S_DEPLOYMENT}"
+            kubectl -n "${K8S_NAMESPACE}" rollout status deployment/"${K8S_DEPLOYMENT}" --timeout=180s || {
+              echo "Rollout timeout — collecting debug info"
+              kubectl -n "${K8S_NAMESPACE}" describe deployment "${K8S_DEPLOYMENT}" || true
+              kubectl -n "${K8S_NAMESPACE}" get pods -o wide || true
+              kubectl -n "${K8S_NAMESPACE}" get events --sort-by=.metadata.creationTimestamp || true
+              exit 5
+            }
+
+            echo "Deployment finished successfully"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      echo 'Cleaning workspace...'
+      cleanWs()
+    }
+    success {
+      echo 'Pipeline succeeded'
+    }
+    failure {
+      echo 'Pipeline failed'
+    }
+  }
+}
