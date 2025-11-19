@@ -25,7 +25,7 @@ const client = axios.create({
 export async function callGrokChat(messages, maxTokens = 512, temperature = 0.2) {
   try {
     const body = {
-      model: 'x-ai/grok-4-fast:free',
+      model: 'google/gemma-3-27b-it:free',
       messages,
       max_tokens: maxTokens,
       temperature
