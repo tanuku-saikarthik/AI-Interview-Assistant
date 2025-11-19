@@ -1,11 +1,22 @@
 pipeline {
   agent any
 
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
   // Configure these defaults or set them in Jenkins job/global env
   environment {
-    DOCKER_REGISTRY = "${env.DOCKER_REGISTRY ?: 'docker.io'}"
-    IMAGE_NAME      = "${env.IMAGE_NAME ?: 'tsaikarthik/ai-interview-assistant'}"
-    IMAGE_TAG       = "${env.IMAGE_TAG ?: 'latest'}"
+    DOCKER_REGISTRY   = "${env.DOCKER_REGISTRY ?: 'docker.io'}"
+    IMAGE_NAME        = "${env.IMAGE_NAME ?: 'tsaikarthik/ai-interview-assistant'}"
+    IMAGE_TAG         = "${env.IMAGE_TAG ?: 'latest'}"
+    K8S_NAMESPACE     = "${env.K8S_NAMESPACE ?: 'ai-interview'}"
+    K8S_DEPLOYMENT    = "${env.K8S_DEPLOYMENT ?: 'ai-interview-deployment'}"
+    K8S_CONTAINER     = "${env.K8S_CONTAINER ?: 'ai-interview-container'}"
+    K8S_MANIFEST_DIR  = "${env.K8S_MANIFEST_DIR ?: 'k8s'}"
     // optionally: you can set NODE_ENV or other env vars here
   }
 
@@ -23,6 +34,7 @@ pipeline {
             registry = registry + '/'
           }
           env.IMAGE_FULL = "${registry ?: ''}${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.IMAGE_TAG}"
           echo "Using IMAGE_FULL=${env.IMAGE_FULL}"
         }
       }
@@ -104,18 +116,39 @@ pipeline {
             export KUBECONFIG="$KUBECONF"
 
             # ensure namespace exists
-            kubectl apply -f k8s/namespace.yaml || true
+            kubectl apply -f "${K8S_MANIFEST_DIR}/namespace.yaml" || true
 
-            echo "Deploying IMAGE_FULL=$IMAGE_FULL to Kubernetes namespace ai-interview"
+            echo "Deploying IMAGE_FULL=$IMAGE_FULL to Kubernetes namespace ${K8S_NAMESPACE}"
 
-            kubectl -n ai-interview apply -f k8s/deployment.yaml
-            kubectl -n ai-interview set image deployment/ai-interview-deployment ai-interview-container="$IMAGE_FULL" --record
+            export TMP_DEPLOY=$(mktemp /tmp/deployment.XXXX.yaml)
+            if command -v python3 >/dev/null 2>&1; then PYTHON_BIN=python3; elif command -v python >/dev/null 2>&1; then PYTHON_BIN=python; else echo "Python interpreter not found" && exit 1; fi
+            $PYTHON_BIN - <<'PY'
+import os, pathlib, sys
+image = os.environ.get("IMAGE_FULL")
+if not image:
+    raise SystemExit("IMAGE_FULL env var missing")
+source = pathlib.Path(os.environ.get("K8S_MANIFEST_DIR", "k8s")) / "deployment.yaml"
+if not source.exists():
+    raise SystemExit(f"{source} not found")
+text = source.read_text()
+placeholder = "__IMAGE_FULL__"
+if placeholder not in text:
+    raise SystemExit(f"Placeholder {placeholder} missing in {source}")
+pathlib.Path(os.environ["TMP_DEPLOY"]).write_text(text.replace(placeholder, image))
+PY
 
-            kubectl -n ai-interview apply -f k8s/service.yaml
-            kubectl -n ai-interview apply -f k8s/ingress.yaml || true
+            kubectl -n "${K8S_NAMESPACE}" apply -f "$TMP_DEPLOY"
+
+            kubectl -n "${K8S_NAMESPACE}" apply -f "${K8S_MANIFEST_DIR}/service.yaml"
+            kubectl -n "${K8S_NAMESPACE}" apply -f "${K8S_MANIFEST_DIR}/ingress.yaml" || true
 
             # wait for rollout
-            kubectl -n ai-interview rollout status deployment/ai-interview-deployment --timeout=180s || true
+            kubectl -n "${K8S_NAMESPACE}" rollout status deployment/"${K8S_DEPLOYMENT}" --timeout=180s || {
+              echo "Rollout did not complete within timeout; printing describe for debugging"
+              kubectl -n "${K8S_NAMESPACE}" describe deployment "${K8S_DEPLOYMENT}" || true
+              kubectl -n "${K8S_NAMESPACE}" get pods -o wide || true
+              exit 1
+            }
           '''
         }
       }

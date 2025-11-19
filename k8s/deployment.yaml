@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: ai-interview-container
-          image: tsaikarthik/ai-interview-assistant:latest
+          image: __IMAGE_FULL__
           imagePullPolicy: Always
           ports:
             - containerPort: 80
