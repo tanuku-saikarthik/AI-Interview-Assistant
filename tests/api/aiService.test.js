@@ -6,7 +6,7 @@ import MockAdapter from "axios-mock-adapter";
 vi.stubGlobal("import", {
   meta: {
     env: {
-      VITE_OPENROUTER_API_KEY: "TEST_KEY"
+      VITE_OPENROUTER_API_KEY: "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"
     }
   }
 });
