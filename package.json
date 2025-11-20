@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+  "test:e2e": "cypress run"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.2",
