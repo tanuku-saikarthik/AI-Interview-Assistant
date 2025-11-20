@@ -27,6 +27,9 @@ pipeline {
             npm install --no-audit --progress=false
           fi
 
+          echo "Installing test environment deps..."
+          npm install -D jsdom @testing-library/react @testing-library/jest-dom --no-audit --progress=false
+
           echo "Running build..."
           npm run build || true
         '''
@@ -61,7 +64,6 @@ pipeline {
       }
     }
 
-  
     /* ------------------- DOCKER BUILD + PUSH ------------------- */
     stage('Build & Push Docker Image') {
       steps {
