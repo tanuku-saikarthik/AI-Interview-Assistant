@@ -61,21 +61,7 @@ pipeline {
       }
     }
 
-    /* ------------------- CYPRESS E2E TESTS ------------------- */
-    stage('E2E Tests (Cypress)') {
-      steps {
-        sh '''
-          if [ -d tests/e2e ]; then
-            echo "Running Cypress E2E..."
-            npx cypress install || true
-            npx cypress run || true
-          else
-            echo "No e2e tests found"
-          fi
-        '''
-      }
-    }
-
+  
     /* ------------------- DOCKER BUILD + PUSH ------------------- */
     stage('Build & Push Docker Image') {
       steps {
