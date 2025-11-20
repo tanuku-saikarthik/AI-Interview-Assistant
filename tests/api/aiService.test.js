@@ -17,7 +17,7 @@ import {
   generateQuestion,
   gradeAnswers,
   assistantPrompt
-} from "./../api/aiService.js"; // adjust path if needed
+} from '../../src/api/aiService.js'; // adjust path if needed
 
 let mock;
 
